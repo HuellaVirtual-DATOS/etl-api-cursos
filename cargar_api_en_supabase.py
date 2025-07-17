@@ -1,49 +1,69 @@
 import requests
-import pandas as pd
-from sqlalchemy import create_engine
+from supabase import create_client, Client
+import os
 
-# Conexión a Supabase
-conn_string = "postgresql://postgres:4224@db.qlrispqcjzartcbrykxj.supabase.co:5432/postgres"
-engine = create_engine(conn_string)
-TABLE_NAME = "cursos_api"
+# Configuración Supabase
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
-# API
-API_URL = "https://bi-sanatorioallende.cluster-gyc.com/web/WSJSON/WS_coursesxuser.php"
+# Parámetros base de la API
+API_URL = "https://bi-sanatorioallende.cluster-gyc.com//web/WSJSON/WS_coursesxuser.php"
 API_KEY = "13fc60029b7d40f2c96ecf29207b87f9"
 
-# Función para obtener datos de la API
-def get_data_from_api():
-    def get_page(page):
-        payload = {
-            "userid": "", "courseid": "", "category": "",
-            "exclude_course_programs": 0, "days_activity": "TODOS",
-            "blegajo": "", "soloaprobados": 0, "solofinalizados": 0,
-            "exclude_tipo_programs": 0, "key": API_KEY, "page": page
+def get_total_pages():
+    """Obtiene la cantidad total de páginas desde la API"""
+    params = {
+        "key": API_KEY,
+        "DaysActivity": "TODOS",
+        "page": 0,
+        "perpage": 1000
+    }
+    response = requests.get(API_URL, params=params)
+    response.raise_for_status()
+    data = response.json()
+    return int(data["totalpages"])
+
+def get_all_data():
+    """Itera por todas las páginas y acumula los datos"""
+    total_pages = get_total_pages()
+    all_items = []
+
+    for page in range(total_pages):
+        print(f"Descargando página {page + 1} de {total_pages}")
+        params = {
+            "key": API_KEY,
+            "DaysActivity": "TODOS",
+            "page": page,
+            "perpage": 1000
         }
-        r = requests.post(API_URL, json=payload)
-        r.raise_for_status()
-        json_data = r.json()
-        return json_data.get("data", [])
+        response = requests.get(API_URL, params=params)
+        response.raise_for_status()
+        data = response.json()
+        if "data" in data:
+            all_items.extend(data["data"])  # o el campo correcto si no se llama "data"
+        else:
+            print(f"Advertencia: No se encontró campo 'data' en la página {page}")
+    
+    return all_items
 
-    first_page = get_page(0)
-    all_data = [item for sublist in first_page for item in sublist]
-    total_pages = int(requests.post(API_URL, json=payload).json()["paging"]["totalpages"])
+def cargar_en_supabase(data):
+    """Carga los datos en una tabla de Supabase"""
+    if not data:
+        print("No hay datos para insertar.")
+        return
+    
+    # Dividir en lotes de 500 si es necesario
+    for i in range(0, len(data), 500):
+        lote = data[i:i + 500]
+        res = supabase.table("cursos_api").insert(lote).execute()
+        print(f"Lote {i // 500 + 1}: {res.status_code}")
 
-    for page in range(1, total_pages):
-        page_data = get_page(page)
-        flat = [item for sublist in page_data for item in sublist]
-        all_data.extend(flat)
-
-    return all_data
-
-# Función para cargar a Supabase
-def load_to_supabase(data):
-    df = pd.DataFrame(data)
-    df["inserted_at"] = pd.Timestamp.now()
-    df.to_sql(TABLE_NAME, engine, if_exists="append", index=False)
-    print(f"Cargadas {len(df)} filas en Supabase.")
-
-# Ejecutar todo
 if __name__ == "__main__":
-    data = get_data_from_api()
-    load_to_supabase(data)
+    try:
+        datos = get_all_data()
+        cargar_en_supabase(datos)
+        print("Carga finalizada correctamente.")
+    except Exception as e:
+        print("Error durante el proceso:", e)
+
