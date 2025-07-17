@@ -67,8 +67,3 @@ if __name__ == "__main__":
     except Exception as e:
         print("Error durante el proceso:", e)
         
-response = requests.get(url)
-print(response.text)  # <-- AÑADÍ ESTO TEMPORALMENTE
-data = response.json()
-
-
